@@ -1,0 +1,112 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps ()
+    }
+
+    environment {
+        AWS_PROFILE = "${AWS_PROFILE}"
+        GIT_SHORT_SHA = GIT_COMMIT.take(10)
+    }
+
+    stages {
+        stage('Init') {
+            steps {
+                script {
+                    echo '<======== Downloading Jenkins Env file ==========>'
+                    env.GIT_AUTHOR = sh (script: 'git log -1 --pretty=%cn ${GIT_COMMIT}', returnStdout: true).trim()
+                    sh 'aws s3 cp $JENKINS_ENV_S3_FILE_PATH jenkins-env.groovy'
+                    load 'jenkins-env.groovy'
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                script {
+                    echo "<=========== Logging to ECR =========>"
+                    def currentWorkspace = sh(script: 'pwd', returnStdout: true).trim()
+                    dir("${currentWorkspace}") {
+                        sh 'aws ecr get-login-password --profile $AWS_PROFILE --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO_URL'
+
+                        echo "===> Replacing docker base image repo to $ECR_REPO_URL"
+                        sh "sed -i 's/\${BASE_IMAGE_REPO}/$ECR_REPO_URL/' ci-cd/Dockerfile "
+
+                        echo '<========= Building RF Redmine Docker image ========>'
+                        echo "${ECR_RF_REDMINE_IMAGE_NAME}"
+                        sh "docker build -t ${ECR_RF_REDMINE_IMAGE_NAME} -f ci-cd/Dockerfile ."
+                        sh "docker push ${ECR_RF_REDMINE_IMAGE_NAME}"
+                    }
+                }
+            }
+        }
+
+        stage('Init tf vars') {
+            steps {
+                script {
+                    echo "<======== Terraform tfvars download =========>"
+                    def currentWorkspace = sh(script: 'pwd', returnStdout: true).trim()
+                    dir("${currentWorkspace}/ci-cd/") {
+                        echo "<========== Downloading Terraform tfvars file ==========>"
+                        sh 'aws s3 cp $TF_VARS_S3_PATH ${TF_VARS_ENV}.tfvars --profile ${AWS_PROFILE}'
+
+                        // Update RF Redmine Image in tfvars
+                        sh "sed -i 's|RFRedmineImage = \".*\"|RFRedmineImage = \"${ECR_RF_REDMINE_IMAGE_NAME}\"|' ${TF_VARS_ENV}.tfvars"
+                    }
+                }
+            }
+        }
+        
+        stage('Terraform init') {
+            steps {
+                script {
+                    echo "<============ Terraform Init to install plugins and module =========>"
+                    def currentWorkspace = sh(script: 'pwd', returnStdout: true).trim()
+                    dir("${currentWorkspace}/ci-cd/") {
+                        sh "terraform init -reconfigure --backend-config=backend-config/${TF_VARS_ENV}.conf"
+                    }
+                }
+            }
+        }
+
+
+        stage('terraform workspace select') {
+            steps {
+                script {
+                    echo "<=========== Workspace ${TF_VARS_ENV} select =======>"
+                    def currentWorkspace = sh(script: 'pwd', returnStdout: true).trim()
+                    dir("${currentWorkspace}/ci-cd/") {
+                        // check if the workspace is exists or not if no then create.
+                        def workspaceList = sh(script: "terraform workspace list", returnStdout: true).trim()
+                        if (!workspaceList.contains("${TF_VARS_ENV}")) {
+                            echo "<========= Workspace '${TF_VARS_ENV}' does not exist, Creating a new workspace ======>"
+                            sh "terraform workspace new ${TF_VARS_ENV}"
+                         }
+                        sh "terraform workspace select ${TF_VARS_ENV}"
+                    }
+                }
+            }
+        }
+
+
+        stage('Terraform Action') {
+            steps {
+                script {
+                    echo "<========= Performing Terraform Action =======>"
+                    def currentWorkspace = sh(script: 'pwd', returnStdout: true).trim()
+                    dir("${currentWorkspace}/ci-cd/") {
+                        if (TF_ACTION == 'PLAN') {
+                            sh "terraform plan -var-file=${TF_VARS_ENV}.tfvars -out=${TF_VARS_ENV}.tfplan"
+                        } else if (TF_ACTION == 'APPLY') {
+                            sh "terraform apply -var-file=${TF_VARS_ENV}.tfvars -auto-approve"
+                        } else if (TF_ACTION == 'DESTROY') {
+                            sh "terraform destroy -var-file=${TF_VARS_ENV}.tfvars -auto-approve"
+                        } else {
+                            error "Invalid action: '${TF_ACTION}'"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

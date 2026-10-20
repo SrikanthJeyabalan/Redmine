@@ -1,0 +1,23 @@
+module "RF_redmine" {
+    source                                     = "./ecs"
+    ClusterName                                = var.ClusterName
+    AppEnvPrefix                               = var.AppEnvPrefix
+    VpcId                                      = var.VpcId
+    RFRedmineImage                             = var.RFRedmineImage
+    TaskDefinition                             = module.RF_redmine.RFRedmineTaskDefinitionArn
+    AppType                                    = var.AppType
+    RailsEnv                                   = var.RailsEnv
+    AppName                                    = var.AppName
+    DesiredCount                               = var.DesiredCount
+    RFRedmineContainerCpu                      = var.RFRedmineContainerCpu 
+    RFRedmineContainerMemory                   = var.RFRedmineContainerMemory
+    RFRedmineAlbHostHeader                     = var.RFRedmineAlbHostHeader
+    RFRedmineRollingMaxPercent                 = var.RFRedmineRollingMaxPercent
+    RFRedmineRollingMinHealthyPercent          = var.RFRedmineRollingMinHealthyPercent
+    RFRedmineHealthCheckPath                   = var.RFRedmineHealthCheckPath
+    AlbListenerArn80                           = var.AlbListenerArn80
+    AlbListenerArn443                          = var.AlbListenerArn443
+    RFRedmineAlbListenerPriority               = var.RFRedmineAlbListenerPriority
+    AwsRegion                                  = var.AwsRegion
+    SecretId                                   = var.SecretId
+}
